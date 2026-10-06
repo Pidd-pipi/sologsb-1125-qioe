@@ -1,9 +1,15 @@
 import { create } from 'zustand';
-import { db, makeId, seedIfEmpty } from '../db';
+import { db, ensureInitialVersion, makeId, seedIfEmpty } from '../db';
+import { getActiveVersion } from '../services/thresholdService';
 import type { AnalysisRecord } from '../types/analysis';
 import type { FindRecord } from '../types/find';
+import {
+  INITIAL_THRESHOLD_SET,
+  INITIAL_THRESHOLD_VERSION_ID,
+} from '../types/threshold';
 import type { MeteoriteSample } from '../types/sample';
 import type { ThinSection } from '../types/section';
+import { classifyByAnalysis, toAdviceSnapshot } from '../utils/classify';
 
 export interface SampleState {
   samples: MeteoriteSample[];
@@ -13,14 +19,37 @@ export interface SampleState {
   loading: boolean;
   loaded: boolean;
   loadAll: () => Promise<void>;
-  addSample: (input: Omit<MeteoriteSample, 'id' | 'createdAt' | 'updatedAt'>) => Promise<string>;
+  addSample: (
+    input: Omit<MeteoriteSample, 'id' | 'createdAt' | 'updatedAt' | 'thresholdVersionId'>,
+  ) => Promise<string>;
   updateSample: (id: string, patch: Partial<MeteoriteSample>) => Promise<void>;
   removeSample: (id: string) => Promise<void>;
   addFind: (input: Omit<FindRecord, 'id' | 'createdAt'>) => Promise<string>;
-  addSection: (input: Omit<ThinSection, 'id' | 'createdAt'>) => Promise<string>;
+  addSection: (
+    input: Omit<ThinSection, 'id' | 'createdAt' | 'thresholdVersionId'>,
+  ) => Promise<string>;
   updateSection: (id: string, patch: Partial<ThinSection>) => Promise<void>;
-  addAnalysis: (input: Omit<AnalysisRecord, 'id' | 'createdAt'>) => Promise<string>;
+  addAnalysis: (
+    input: Omit<
+      AnalysisRecord,
+      | 'id'
+      | 'createdAt'
+      | 'thresholdVersionId'
+      | 'reviewState'
+      | 'backfilled'
+      | 'boundAdvice'
+      | 'previousAdvice'
+      | 'previousThresholdVersionId'
+      | 'reviewChangedAt'
+    >,
+  ) => Promise<string>;
   nextSampleSeq: () => number;
+}
+
+/** 当前生效阈值版本 id（极端缺失时兜底初始版本） */
+async function activeVersionId(): Promise<string> {
+  const active = await getActiveVersion();
+  return active?.id ?? INITIAL_THRESHOLD_VERSION_ID;
 }
 
 export const useSampleStore = create<SampleState>((set, get) => ({
@@ -33,6 +62,7 @@ export const useSampleStore = create<SampleState>((set, get) => ({
 
   loadAll: async () => {
     set({ loading: true });
+    await ensureInitialVersion();
     await seedIfEmpty();
     const [samples, finds, sections, analysis] = await Promise.all([
       db.samples.toArray(),
@@ -49,7 +79,13 @@ export const useSampleStore = create<SampleState>((set, get) => ({
 
   addSample: async (input) => {
     const now = Date.now();
-    const record: MeteoriteSample = { ...input, id: makeId('sample'), createdAt: now, updatedAt: now };
+    const record: MeteoriteSample = {
+      ...input,
+      id: makeId('sample'),
+      thresholdVersionId: await activeVersionId(),
+      createdAt: now,
+      updatedAt: now,
+    };
     await db.samples.add(record);
     set({ samples: [record, ...get().samples] });
     return record.id;
@@ -64,12 +100,26 @@ export const useSampleStore = create<SampleState>((set, get) => ({
   },
 
   removeSample: async (id) => {
-    await db.transaction('rw', db.samples, db.finds, db.sections, db.analysis, async () => {
-      await db.samples.delete(id);
-      await db.finds.where('sampleId').equals(id).delete();
-      await db.sections.where('sampleId').equals(id).delete();
-      await db.analysis.where('sampleId').equals(id).delete();
-    });
+    await db.transaction(
+      'rw',
+      db.samples,
+      db.finds,
+      db.sections,
+      db.analysis,
+      db.adviceReviewLogs,
+      async () => {
+        const analysisIds = (
+          await db.analysis.where('sampleId').equals(id).primaryKeys()
+        ) as string[];
+        await db.samples.delete(id);
+        await db.finds.where('sampleId').equals(id).delete();
+        await db.sections.where('sampleId').equals(id).delete();
+        await db.analysis.where('sampleId').equals(id).delete();
+        if (analysisIds.length > 0) {
+          await db.adviceReviewLogs.where('analysisId').anyOf(analysisIds).delete();
+        }
+      },
+    );
     set({
       samples: get().samples.filter((s) => s.id !== id),
       finds: get().finds.filter((f) => f.sampleId !== id),
@@ -86,7 +136,12 @@ export const useSampleStore = create<SampleState>((set, get) => ({
   },
 
   addSection: async (input) => {
-    const record: ThinSection = { ...input, id: makeId('section'), createdAt: Date.now() };
+    const record: ThinSection = {
+      ...input,
+      id: makeId('section'),
+      thresholdVersionId: await activeVersionId(),
+      createdAt: Date.now(),
+    };
     await db.sections.add(record);
     set({ sections: [record, ...get().sections] });
     return record.id;
@@ -98,7 +153,30 @@ export const useSampleStore = create<SampleState>((set, get) => ({
   },
 
   addAnalysis: async (input) => {
-    const record: AnalysisRecord = { ...input, id: makeId('analysis'), createdAt: Date.now() };
+    const active = await getActiveVersion();
+    const now = Date.now();
+    const advice = classifyByAnalysis(
+      {
+        fa: Number(input.fa) || 0,
+        fs: Number(input.fs) || 0,
+        ni: Number(input.ni) || 0,
+        kamaciteBandwidth: Number(input.kamaciteBandwidth) || 0,
+      },
+      // 正常流程 active 一定存在；极端缺失时用初始版本兜底
+      active?.thresholds ?? INITIAL_THRESHOLD_SET,
+    );
+    const record: AnalysisRecord = {
+      ...input,
+      id: makeId('analysis'),
+      thresholdVersionId: active?.id ?? INITIAL_THRESHOLD_VERSION_ID,
+      previousThresholdVersionId: null,
+      reviewState: 'current',
+      backfilled: false,
+      boundAdvice: toAdviceSnapshot(advice),
+      previousAdvice: null,
+      reviewChangedAt: null,
+      createdAt: now,
+    };
     await db.analysis.add(record);
     set({ analysis: [record, ...get().analysis] });
     return record.id;

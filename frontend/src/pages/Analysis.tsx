@@ -22,8 +22,11 @@ import SaveIcon from '@mui/icons-material/Save';
 import EmptyState from '../components/common/EmptyState';
 import ClassificationBadge from '../components/common/Badge';
 import FieldGroup from '../components/common/FieldGroup';
+import AdviceCompareRow from '../components/common/AdviceCompareRow';
+import ReviewActions from '../components/common/ReviewActions';
 import { useLocalDraft } from '../hooks/useLocalDraft';
 import { useSampleStore } from '../stores/sampleStore';
+import { useThresholdStore } from '../stores/thresholdStore';
 import { useToastStore } from '../stores/uiStore';
 import {
   ANALYSIS_METHODS,
@@ -33,6 +36,7 @@ import {
   type AnalysisMethod,
   type AnalysisTarget,
 } from '../types/analysis';
+import { INITIAL_THRESHOLD_SET } from '../types/threshold';
 import { classifyByAnalysis, evaluateThresholds } from '../utils/classify';
 import { formatDate } from '../utils/format';
 
@@ -55,6 +59,8 @@ export default function Analysis() {
   const analysis = useSampleStore((s) => s.analysis);
   const addAnalysis = useSampleStore((s) => s.addAnalysis);
   const notify = useToastStore((s) => s.notify);
+  const activeVersion = useThresholdStore((s) => s.active);
+  const versions = useThresholdStore((s) => s.versions);
 
   const initial = useMemo<AnalysisDraft>(
     () => ({
@@ -79,8 +85,10 @@ export default function Analysis() {
     [sections, value.sampleId],
   );
 
-  const hits = evaluateThresholds(value);
-  const advice = classifyByAnalysis(value);
+  // 实时建议按「当前生效版本」计算；版本尚未装载时用最早区间兜底
+  const activeSet = activeVersion?.thresholds ?? INITIAL_THRESHOLD_SET;
+  const hits = evaluateThresholds(value, activeSet);
+  const advice = classifyByAnalysis(value, activeSet);
   const outOfRange = hits.filter((h) => !h.inRange);
 
   const submit = async () => {
@@ -105,7 +113,7 @@ export default function Analysis() {
       testedAt: value.testedAt,
     });
     clear();
-    notify('检测记录已写入本地库');
+    notify(`检测记录已写入并绑定第 ${activeVersion?.revision ?? 1} 版阈值`);
     patch({ fa: 18.5, fs: 16, ni: 0.8, kamaciteBandwidth: 0.05 });
   };
 
@@ -114,7 +122,9 @@ export default function Analysis() {
       <Box>
         <Typography variant="h4">分析检测</Typography>
         <Typography variant="body2" color="text.secondary">
-          录入 Fa / Fs / Ni / 铁纹石带宽，右侧实时给出分类建议与阈值命中说明。
+          录入 Fa / Fs / Ni / 铁纹石带宽，右侧按当前生效阈值版本
+          {activeVersion ? `（第 ${activeVersion.revision} 版 · ${activeVersion.name}）` : ''}
+          实时给出分类建议与阈值命中说明。
         </Typography>
       </Box>
 
@@ -211,8 +221,8 @@ export default function Analysis() {
                 <FieldGroup
                   title="橄榄石 Fa"
                   unit="mol%"
-                  min={0}
-                  max={30}
+                  min={activeSet.ranges.fa.min}
+                  max={activeSet.ranges.fa.max}
                   value={value.fa}
                   onChange={(v) => patch({ fa: v })}
                   inputId="analysis-fa"
@@ -222,8 +232,8 @@ export default function Analysis() {
                 <FieldGroup
                   title="辉石 Fs"
                   unit="mol%"
-                  min={0}
-                  max={30}
+                  min={activeSet.ranges.fs.min}
+                  max={activeSet.ranges.fs.max}
                   value={value.fs}
                   onChange={(v) => patch({ fs: v })}
                   inputId="analysis-fs"
@@ -233,8 +243,8 @@ export default function Analysis() {
                 <FieldGroup
                   title="Ni 含量"
                   unit="wt%"
-                  min={0}
-                  max={20}
+                  min={activeSet.ranges.ni.min}
+                  max={activeSet.ranges.ni.max}
                   value={value.ni}
                   onChange={(v) => patch({ ni: v })}
                   inputId="analysis-ni"
@@ -244,8 +254,8 @@ export default function Analysis() {
                 <FieldGroup
                   title="铁纹石带宽"
                   unit="mm"
-                  min={0}
-                  max={2}
+                  min={activeSet.ranges.kamaciteBandwidth.min}
+                  max={activeSet.ranges.kamaciteBandwidth.max}
                   value={value.kamaciteBandwidth}
                   onChange={(v) => patch({ kamaciteBandwidth: v })}
                   inputId="analysis-band"
@@ -268,9 +278,10 @@ export default function Analysis() {
         <Grid item xs={12} md={5}>
           <Stack spacing={2.5}>
             <Paper variant="outlined" sx={{ p: 2.5 }}>
-              <Typography variant="h6" sx={{ mb: 1 }}>
-                分类建议
-              </Typography>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="h6">分类建议</Typography>
+                <Chip size="small" label={`依据第 ${activeVersion?.revision ?? 1} 版`} variant="outlined" />
+              </Stack>
               <Stack spacing={1.25}>
                 <ClassificationBadge category={advice.category} showGroup={false} />
                 <Typography variant="body2">{advice.summary}</Typography>
@@ -323,10 +334,10 @@ export default function Analysis() {
                 ))}
                 {outOfRange.length ? (
                   <Alert severity="warning">
-                    {outOfRange.length} 项超出常规阈值，建议复核制样或补测。
+                    {outOfRange.length} 项超出第 {activeVersion?.revision ?? 1} 版常规阈值，建议复核制样或补测。
                   </Alert>
                 ) : (
-                  <Alert severity="success">全部数值落在常规阈值内。</Alert>
+                  <Alert severity="success">全部数值落在当前版本常规阈值内。</Alert>
                 )}
               </Stack>
             </Paper>
@@ -346,26 +357,31 @@ export default function Analysis() {
             actionTo="/samples/new"
           />
         ) : (
-          <Stack spacing={1}>
+          <Stack spacing={1.25}>
             {analysis.slice(0, 12).map((a) => {
               const s = samples.find((x) => x.id === a.sampleId);
-              const ev = classifyByAnalysis(a);
+              const bound = versions.find((v) => v.id === a.thresholdVersionId) ?? null;
               return (
                 <Box
                   key={a.id}
                   sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}
                 >
-                  <Stack direction="row" justifyContent="space-between" flexWrap="wrap" gap={1}>
+                  <Stack direction="row" justifyContent="space-between" flexWrap="wrap" gap={1} sx={{ mb: 0.75 }}>
                     <Typography variant="subtitle2">
                       {s ? s.sampleNo : '未知样本'} · {ANALYSIS_METHOD_LABELS[a.method]} ·{' '}
                       {formatDate(a.testedAt)}
                     </Typography>
-                    <ClassificationBadge category={ev.category} showGroup={false} />
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      label={bound ? `绑定第 ${bound.revision} 版` : '版本缺失'}
+                    />
                   </Stack>
-                  <Typography variant="caption" color="text.secondary">
-                    Fa {a.fa} mol% · Fs {a.fs} mol% · Ni {a.ni} wt% · 带宽 {a.kamaciteBandwidth} mm ——{' '}
-                    {ev.summary}
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.75 }}>
+                    Fa {a.fa} mol% · Fs {a.fs} mol% · Ni {a.ni} wt% · 带宽 {a.kamaciteBandwidth} mm
                   </Typography>
+                  <AdviceCompareRow rec={a} boundVersion={bound} />
+                  <ReviewActions rec={a} compact />
                 </Box>
               );
             })}

@@ -30,6 +30,8 @@ export interface ThinSection {
   /** 显微照片清单（文件名 / 描述） */
   micrographs: string[];
   quality: SectionQuality;
+  /** 绑定的阈值版本：发布时与所属样本、检测记录共同绑定同一版本 */
+  thresholdVersionId: string;
   createdAt: number;
 }
 

@@ -27,6 +27,8 @@ export interface MeteoriteSample {
   storage: StorageLocation;
   /** 备注（可选） */
   note?: string;
+  /** 绑定的阈值版本：发布时与切片、检测记录共同绑定同一版本 */
+  thresholdVersionId: string;
   createdAt: number;
   /** v3 升级迁移新增字段 */
   updatedAt: number;

@@ -20,6 +20,7 @@ import {
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import PublicIcon from '@mui/icons-material/Public';
 import { useSampleStore } from '../../stores/sampleStore';
+import { useThresholdStore } from '../../stores/thresholdStore';
 import { useToastStore } from '../../stores/uiStore';
 
 const DRAWER_WIDTH = 232;
@@ -45,18 +46,28 @@ const NAV = [
   { to: '/sections', label: '切片库' },
   { to: '/analysis', label: '分析检测' },
   { to: '/locations', label: '发现地分布' },
+  { to: '/thresholds', label: '阈值版本' },
 ];
 
 export default function AppShell({ children }: { children: ReactNode }) {
   const loadAll = useSampleStore((s) => s.loadAll);
   const loaded = useSampleStore((s) => s.loaded);
   const sampleCount = useSampleStore((s) => s.samples.length);
+  const loadThresholds = useThresholdStore((s) => s.load);
+  const thresholdsLoaded = useThresholdStore((s) => s.loaded);
+  const activeRevision = useThresholdStore((s) => s.active?.revision);
+  const analysis = useSampleStore((s) => s.analysis);
+  const pendingCount = analysis.filter((a) => a.reviewState === 'pending').length;
   const toast = useToastStore();
   const location = useLocation();
 
   useEffect(() => {
     if (!loaded) void loadAll();
   }, [loaded, loadAll]);
+
+  useEffect(() => {
+    if (!thresholdsLoaded) void loadThresholds();
+  }, [thresholdsLoaded, loadThresholds]);
 
   return (
     <ThemeProvider theme={theme}>
@@ -77,6 +88,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
               label={`本地档案 ${sampleCount} 份样本`}
               sx={{ bgcolor: 'rgba(255,255,255,0.14)', color: '#f5efe4' }}
             />
+            {typeof activeRevision === 'number' ? (
+              <Chip
+                size="small"
+                label={`阈值第 ${activeRevision} 版`}
+                sx={{ bgcolor: 'rgba(255,255,255,0.14)', color: '#f5efe4' }}
+              />
+            ) : null}
             <Box sx={{ flex: 1 }} />
             <Typography variant="caption" sx={{ opacity: 0.8 }}>
               数据仅存于本机浏览器 · IndexedDB
@@ -103,21 +121,37 @@ export default function AppShell({ children }: { children: ReactNode }) {
               编目工作区
             </Typography>
             <List dense>
-              {NAV.map((item) => (
-                <ListItemButton
-                  key={item.to}
-                  component={RouterLink}
-                  to={item.to}
-                  selected={
-                    item.to === '/'
-                      ? location.pathname === '/'
-                      : location.pathname.startsWith(item.to)
-                  }
-                  sx={{ borderRadius: 1.5, mb: 0.25 }}
-                >
-                  <ListItemText primary={item.label} />
-                </ListItemButton>
-              ))}
+              {NAV.map((item) => {
+                const selected =
+                  item.to === '/'
+                    ? location.pathname === '/'
+                    : location.pathname.startsWith(item.to);
+                return (
+                  <ListItemButton
+                    key={item.to}
+                    component={RouterLink}
+                    to={item.to}
+                    selected={selected}
+                    sx={{ borderRadius: 1.5, mb: 0.25 }}
+                  >
+                    <ListItemText
+                      primary={
+                        <Stack direction="row" spacing={0.75} alignItems="center">
+                          <span>{item.label}</span>
+                          {item.to === '/thresholds' && pendingCount > 0 ? (
+                            <Chip
+                              size="small"
+                              color="warning"
+                              label={`${pendingCount} 待核对`}
+                              sx={{ height: 18, '& .MuiChip-label': { px: 0.75, fontSize: 11 } }}
+                            />
+                          ) : null}
+                        </Stack>
+                      }
+                    />
+                  </ListItemButton>
+                );
+              })}
             </List>
             <Divider sx={{ my: 1.5 }} />
             <Stack spacing={0.5} sx={{ px: 1.5 }}>

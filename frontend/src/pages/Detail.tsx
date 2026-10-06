@@ -27,7 +27,6 @@ import { useToastStore } from '../stores/uiStore';
 import {
   ANALYSIS_METHODS,
   ANALYSIS_METHOD_LABELS,
-  ANALYSIS_THRESHOLDS,
   type AnalysisMethod,
 } from '../types/analysis';
 import {
@@ -48,6 +47,10 @@ import {
   WEATHERING_LABELS,
 } from '../types/sample';
 import { FIND_ENVIRONMENT_LABELS, COORDINATE_SOURCE_LABELS } from '../types/find';
+import { INITIAL_THRESHOLD_SET, INITIAL_THRESHOLD_VERSION_ID } from '../types/threshold';
+import AdviceCompareRow from '../components/common/AdviceCompareRow';
+import ReviewActions from '../components/common/ReviewActions';
+import { useThresholdStore } from '../stores/thresholdStore';
 import { classifyByAnalysis, evaluateThresholds } from '../utils/classify';
 import { formatDate, formatNumber, formatWeight } from '../utils/format';
 import { formatCoordinate } from '../utils/geo';
@@ -63,11 +66,23 @@ export default function Detail() {
   const addAnalysis = useSampleStore((s) => s.addAnalysis);
   const updateSample = useSampleStore((s) => s.updateSample);
   const notify = useToastStore((s) => s.notify);
+  const activeVersion = useThresholdStore((s) => s.active);
+  const thresholdVersions = useThresholdStore((s) => s.versions);
+  const activeSet = activeVersion?.thresholds ?? INITIAL_THRESHOLD_SET;
 
   const sample = useMemo(() => samples.find((s) => s.id === id), [samples, id]);
   const find = useMemo(() => finds.find((f) => f.sampleId === id), [finds, id]);
   const mySections = useMemo(() => sections.filter((s) => s.sampleId === id), [sections, id]);
   const myAnalysis = useMemo(() => analysis.filter((a) => a.sampleId === id), [analysis, id]);
+  const pendingForSample = useMemo(
+    () => myAnalysis.filter((a) => a.reviewState === 'pending'),
+    [myAnalysis],
+  );
+  const boundSampleVersion = useMemo(
+    () => thresholdVersions.find((v) => v.id === sample?.thresholdVersionId) ?? null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [thresholdVersions, sample?.thresholdVersionId],
+  );
 
   const [sectionDraft, setSectionDraft] = useState({
     sectionNo: '',
@@ -100,8 +115,8 @@ export default function Detail() {
   }
 
   const mineralSum = mineralTotal(sectionDraft.minerals);
-  const advice = classifyByAnalysis(analysisDraft);
-  const hits = evaluateThresholds(analysisDraft);
+  const advice = classifyByAnalysis(analysisDraft, activeSet);
+  const hits = evaluateThresholds(analysisDraft, activeSet);
 
   const submitSection = async () => {
     const no = sectionDraft.sectionNo.trim() || `TS-${new Date().getFullYear()}-${mySections.length + 1}`.padEnd(3, '0');
@@ -141,6 +156,14 @@ export default function Detail() {
         <Typography variant="h4">样本详情</Typography>
       </Stack>
 
+      {pendingForSample.length > 0 ? (
+        <Alert severity="warning">
+          该样本有 {pendingForSample.length} 条检测记录的分类建议在最新阈值下已失效
+          {pendingForSample.some((a) => a.backfilled) ? '（含旧数据按最早区间回填、待核对的记录）' : ''}
+          ，下方已并排展示原结论与新结论，请决定保留原结论还是重新认定。
+        </Alert>
+      ) : null}
+
       <Grid container spacing={2.5}>
         <Grid item xs={12} md={4}>
           <SampleCard
@@ -172,6 +195,27 @@ export default function Detail() {
                 group={sample.chemicalGroup}
                 size="medium"
               />
+              <Stack direction="row" spacing={0.75}>
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  color={
+                    activeVersion && sample.thresholdVersionId !== activeVersion.id
+                      ? 'warning'
+                      : 'default'
+                  }
+                  label={
+                    sample.thresholdVersionId === INITIAL_THRESHOLD_VERSION_ID
+                      ? '绑定第 1 版（最早区间）'
+                      : boundSampleVersion
+                        ? `绑定第 ${boundSampleVersion.revision} 版阈值`
+                        : '阈值版本缺失'
+                  }
+                />
+                {activeVersion && sample.thresholdVersionId !== activeVersion.id ? (
+                  <Chip size="small" color="warning" label={`已有第 ${activeVersion.revision} 版生效`} />
+                ) : null}
+              </Stack>
               <Grid container spacing={1.5}>
                 <Grid item xs={6} sm={4}>
                   <Typography variant="caption" color="text.secondary">
@@ -421,25 +465,28 @@ export default function Detail() {
             ) : (
               <Stack spacing={1.25} sx={{ mb: 2 }}>
                 {myAnalysis.map((a) => {
-                  const a2 = classifyByAnalysis(a);
+                  const bound = thresholdVersions.find((v) => v.id === a.thresholdVersionId) ?? null;
                   return (
                     <Box
                       key={a.id}
                       sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}
                     >
-                      <Stack direction="row" justifyContent="space-between" flexWrap="wrap" gap={1}>
+                      <Stack direction="row" justifyContent="space-between" flexWrap="wrap" gap={1} sx={{ mb: 0.75 }}>
                         <Typography variant="subtitle2">
                           {ANALYSIS_METHOD_LABELS[a.method]} · {a.testedAt}
                         </Typography>
-                        <ClassificationBadge category={a2.category} showGroup={false} />
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={bound ? `绑定第 ${bound.revision} 版阈值` : '版本缺失'}
+                        />
                       </Stack>
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 0.75 }}>
                         Fa {formatNumber(a.fa, 2, ' mol%')} · Fs {formatNumber(a.fs, 2, ' mol%')} · Ni{' '}
                         {formatNumber(a.ni, 2, ' wt%')} · 带宽 {formatNumber(a.kamaciteBandwidth, 3, ' mm')}
                       </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {a2.summary}
-                      </Typography>
+                      <AdviceCompareRow rec={a} boundVersion={bound} />
+                      <ReviewActions rec={a} compact />
                     </Box>
                   );
                 })}
@@ -484,8 +531,8 @@ export default function Detail() {
                 <FieldGroup
                   title="橄榄石 Fa"
                   unit="mol%"
-                  min={0}
-                  max={30}
+                  min={activeSet.ranges.fa.min}
+                  max={activeSet.ranges.fa.max}
                   value={analysisDraft.fa}
                   onChange={(v) => setAnalysisDraft((d) => ({ ...d, fa: v }))}
                   inputId="detail-fa"
@@ -494,8 +541,8 @@ export default function Detail() {
                 <FieldGroup
                   title="辉石 Fs"
                   unit="mol%"
-                  min={0}
-                  max={30}
+                  min={activeSet.ranges.fs.min}
+                  max={activeSet.ranges.fs.max}
                   value={analysisDraft.fs}
                   onChange={(v) => setAnalysisDraft((d) => ({ ...d, fs: v }))}
                   inputId="detail-fs"
@@ -504,8 +551,8 @@ export default function Detail() {
                 <FieldGroup
                   title="Ni 含量"
                   unit="wt%"
-                  min={0}
-                  max={20}
+                  min={activeSet.ranges.ni.min}
+                  max={activeSet.ranges.ni.max}
                   value={analysisDraft.ni}
                   onChange={(v) => setAnalysisDraft((d) => ({ ...d, ni: v }))}
                   inputId="detail-ni"
@@ -514,8 +561,8 @@ export default function Detail() {
                 <FieldGroup
                   title="铁纹石带宽"
                   unit="mm"
-                  min={0}
-                  max={2}
+                  min={activeSet.ranges.kamaciteBandwidth.min}
+                  max={activeSet.ranges.kamaciteBandwidth.max}
                   value={analysisDraft.kamaciteBandwidth}
                   onChange={(v) => setAnalysisDraft((d) => ({ ...d, kamaciteBandwidth: v }))}
                   inputId="detail-band"
@@ -523,7 +570,7 @@ export default function Detail() {
                 />
               </Stack>
               <Alert severity={hits.every((h) => h.inRange) ? 'success' : 'warning'}>
-                分类建议：{advice.summary}
+                分类建议（第 {activeVersion?.revision ?? 1} 版阈值）：{advice.summary}
                 <br />
                 阈值命中：{hits.filter((h) => h.inRange).length}/{hits.length} 项落在常规区间
                 <br />
@@ -539,8 +586,18 @@ export default function Detail() {
                 写入检测记录
               </Button>
               <Typography variant="caption" color="text.secondary">
-                阈值参考：
-                {ANALYSIS_THRESHOLDS.map((t) => `${t.label} ${t.min}~${t.max}${t.unit}`).join(' · ')}
+                第 {activeVersion?.revision ?? 1} 版阈值参考：
+                {(
+                  [
+                    ['橄榄石 Fa', activeSet.ranges.fa],
+                    ['辉石 Fs', activeSet.ranges.fs],
+                    ['Ni', activeSet.ranges.ni],
+                    ['铁纹石带宽', activeSet.ranges.kamaciteBandwidth],
+                  ] as const
+                )
+                  .map(([label, t]) => `${label} ${t.min}~${t.max}${t.unit}`)
+                  .join(' · ')}
+                ；保存时记录绑定该版本，阈值更新后原结论仍可追溯。
               </Typography>
             </Stack>
           </Paper>

@@ -22,12 +22,14 @@ import SampleCard from '../components/common/SampleCard';
 import FieldGroup from '../components/common/FieldGroup';
 import ClassificationBadge from '../components/common/Badge';
 import EmptyState from '../components/common/EmptyState';
+import AnalysisConclusion from '../components/analysis/AnalysisConclusion';
+import { SampleReviewBadge } from '../components/analysis/ReviewBadges';
+import { useCurrentThresholds, useVersionMap } from '../hooks/useThresholdVersion';
 import { useSampleStore } from '../stores/sampleStore';
 import { useToastStore } from '../stores/uiStore';
 import {
   ANALYSIS_METHODS,
   ANALYSIS_METHOD_LABELS,
-  ANALYSIS_THRESHOLDS,
   type AnalysisMethod,
 } from '../types/analysis';
 import {
@@ -43,11 +45,13 @@ import {
   type SectionQuality,
 } from '../types/section';
 import {
+  CATEGORY_LABELS,
   FALL_OR_FIND_LABELS,
   STORAGE_LABELS,
   WEATHERING_LABELS,
 } from '../types/sample';
 import { FIND_ENVIRONMENT_LABELS, COORDINATE_SOURCE_LABELS } from '../types/find';
+import { reaffirmSample } from '../services/versionService';
 import { classifyByAnalysis, evaluateThresholds } from '../utils/classify';
 import { formatDate, formatNumber, formatWeight } from '../utils/format';
 import { formatCoordinate } from '../utils/geo';
@@ -62,7 +66,10 @@ export default function Detail() {
   const addSection = useSampleStore((s) => s.addSection);
   const addAnalysis = useSampleStore((s) => s.addAnalysis);
   const updateSample = useSampleStore((s) => s.updateSample);
+  const loadAll = useSampleStore((s) => s.loadAll);
   const notify = useToastStore((s) => s.notify);
+  const currentThresholds = useCurrentThresholds();
+  const versionMap = useVersionMap();
 
   const sample = useMemo(() => samples.find((s) => s.id === id), [samples, id]);
   const find = useMemo(() => finds.find((f) => f.sampleId === id), [finds, id]);
@@ -100,8 +107,8 @@ export default function Detail() {
   }
 
   const mineralSum = mineralTotal(sectionDraft.minerals);
-  const advice = classifyByAnalysis(analysisDraft);
-  const hits = evaluateThresholds(analysisDraft);
+  const advice = classifyByAnalysis(analysisDraft, currentThresholds);
+  const hits = evaluateThresholds(analysisDraft, currentThresholds);
 
   const submitSection = async () => {
     const no = sectionDraft.sectionNo.trim() || `TS-${new Date().getFullYear()}-${mySections.length + 1}`.padEnd(3, '0');
@@ -172,6 +179,42 @@ export default function Detail() {
                 group={sample.chemicalGroup}
                 size="medium"
               />
+              {sample.reviewState === 'pending' ? (
+                <Alert
+                  severity="warning"
+                  action={
+                    <Stack direction="row" spacing={1}>
+                      <Button
+                        color="inherit"
+                        size="small"
+                        onClick={async () => {
+                          await reaffirmSample(sample.id, true);
+                          await loadAll();
+                          notify(`已采用新建议分类：${sample.suggestedCategory ? CATEGORY_LABELS[sample.suggestedCategory] : ''}`);
+                        }}
+                      >
+                        采用{sample.suggestedCategory ? CATEGORY_LABELS[sample.suggestedCategory] : '新分类'}
+                      </Button>
+                      <Button
+                        color="inherit"
+                        size="small"
+                        onClick={async () => {
+                          await reaffirmSample(sample.id, false);
+                          await loadAll();
+                          notify('已保留原分类');
+                        }}
+                      >
+                        保留 {CATEGORY_LABELS[sample.category]}
+                      </Button>
+                    </Stack>
+                  }
+                >
+                  最新阈值版本下该样本的检测结论发生变化，建议重新认定分类。下方逐条检测记录可单独核对。
+                </Alert>
+              ) : null}
+              <Stack direction="row" spacing={1} alignItems="center">
+                <SampleReviewBadge state={sample.reviewState} />
+              </Stack>
               <Grid container spacing={1.5}>
                 <Grid item xs={6} sm={4}>
                   <Typography variant="caption" color="text.secondary">
@@ -297,6 +340,12 @@ export default function Detail() {
                         <Chip size="small" label={`厚度 ${s.thickness} μm`} />
                         <Chip size="small" variant="outlined" label={PREPARATION_LABELS[s.preparation]} />
                         <Chip size="small" color="secondary" label={SECTION_QUALITY_LABELS[s.quality]} />
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          color="info"
+                          label={`绑定 ${versionMap.get(s.thresholdVersionId ?? '')?.code ?? 'v1'}`}
+                        />
                       </Stack>
                     </Stack>
                     <Typography variant="body2" color="text.secondary">
@@ -420,29 +469,16 @@ export default function Detail() {
               <Alert severity="info">暂无检测记录。</Alert>
             ) : (
               <Stack spacing={1.25} sx={{ mb: 2 }}>
-                {myAnalysis.map((a) => {
-                  const a2 = classifyByAnalysis(a);
-                  return (
-                    <Box
-                      key={a.id}
-                      sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}
-                    >
-                      <Stack direction="row" justifyContent="space-between" flexWrap="wrap" gap={1}>
-                        <Typography variant="subtitle2">
-                          {ANALYSIS_METHOD_LABELS[a.method]} · {a.testedAt}
-                        </Typography>
-                        <ClassificationBadge category={a2.category} showGroup={false} />
-                      </Stack>
-                      <Typography variant="body2" color="text.secondary">
-                        Fa {formatNumber(a.fa, 2, ' mol%')} · Fs {formatNumber(a.fs, 2, ' mol%')} · Ni{' '}
-                        {formatNumber(a.ni, 2, ' wt%')} · 带宽 {formatNumber(a.kamaciteBandwidth, 3, ' mm')}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {a2.summary}
-                      </Typography>
-                    </Box>
-                  );
-                })}
+                {myAnalysis.map((a) => (
+                  <Box key={a.id}>
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                      {ANALYSIS_METHOD_LABELS[a.method]} · {a.testedAt} · Fa {formatNumber(a.fa, 2)} · Fs{' '}
+                      {formatNumber(a.fs, 2)} · Ni {formatNumber(a.ni, 2)} · 带宽{' '}
+                      {formatNumber(a.kamaciteBandwidth, 3)}
+                    </Typography>
+                    <AnalysisConclusion record={a} />
+                  </Box>
+                ))}
               </Stack>
             )}
 
@@ -539,8 +575,8 @@ export default function Detail() {
                 写入检测记录
               </Button>
               <Typography variant="caption" color="text.secondary">
-                阈值参考：
-                {ANALYSIS_THRESHOLDS.map((t) => `${t.label} ${t.min}~${t.max}${t.unit}`).join(' · ')}
+                当前版本阈值：
+                {currentThresholds.ranges.map((t) => `${t.label} ${t.min}~${t.max}${t.unit}`).join(' · ')}
               </Typography>
             </Stack>
           </Paper>

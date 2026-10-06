@@ -22,7 +22,9 @@ import SaveIcon from '@mui/icons-material/Save';
 import EmptyState from '../components/common/EmptyState';
 import ClassificationBadge from '../components/common/Badge';
 import FieldGroup from '../components/common/FieldGroup';
+import AnalysisConclusion from '../components/analysis/AnalysisConclusion';
 import { useLocalDraft } from '../hooks/useLocalDraft';
+import { useCurrentThresholds, useVersionMap } from '../hooks/useThresholdVersion';
 import { useSampleStore } from '../stores/sampleStore';
 import { useToastStore } from '../stores/uiStore';
 import {
@@ -73,14 +75,16 @@ export default function Analysis() {
 
   const { value, patch, reset, clear, restored } = useLocalDraft<AnalysisDraft>('analysis-entry', initial);
   const [error, setError] = useState<string | null>(null);
+  const currentThresholds = useCurrentThresholds();
+  const versionMap = useVersionMap();
 
   const sampleSections = useMemo(
     () => sections.filter((s) => s.sampleId === value.sampleId),
     [sections, value.sampleId],
   );
 
-  const hits = evaluateThresholds(value);
-  const advice = classifyByAnalysis(value);
+  const hits = evaluateThresholds(value, currentThresholds);
+  const advice = classifyByAnalysis(value, currentThresholds);
   const outOfRange = hits.filter((h) => !h.inRange);
 
   const submit = async () => {
@@ -346,26 +350,31 @@ export default function Analysis() {
             actionTo="/samples/new"
           />
         ) : (
-          <Stack spacing={1}>
+          <Stack spacing={1.5}>
             {analysis.slice(0, 12).map((a) => {
               const s = samples.find((x) => x.id === a.sampleId);
-              const ev = classifyByAnalysis(a);
+              const bound = a.thresholdVersionId ? versionMap.get(a.thresholdVersionId) : undefined;
               return (
                 <Box
                   key={a.id}
                   sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.5 }}
                 >
-                  <Stack direction="row" justifyContent="space-between" flexWrap="wrap" gap={1}>
+                  <Stack direction="row" justifyContent="space-between" flexWrap="wrap" gap={1} sx={{ mb: 1 }}>
                     <Typography variant="subtitle2">
                       {s ? s.sampleNo : '未知样本'} · {ANALYSIS_METHOD_LABELS[a.method]} ·{' '}
                       {formatDate(a.testedAt)}
                     </Typography>
-                    <ClassificationBadge category={ev.category} showGroup={false} />
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      color="secondary"
+                      label={`绑定版本 ${a.frozenAdvice?.versionCode ?? bound?.code ?? 'v1（待核对）'}`}
+                    />
                   </Stack>
-                  <Typography variant="caption" color="text.secondary">
-                    Fa {a.fa} mol% · Fs {a.fs} mol% · Ni {a.ni} wt% · 带宽 {a.kamaciteBandwidth} mm ——{' '}
-                    {ev.summary}
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                    Fa {a.fa} mol% · Fs {a.fs} mol% · Ni {a.ni} wt% · 带宽 {a.kamaciteBandwidth} mm
                   </Typography>
+                  <AnalysisConclusion record={a} />
                 </Box>
               );
             })}

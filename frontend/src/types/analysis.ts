@@ -1,4 +1,4 @@
-import type { ClassificationAdvice } from './sample';
+import type { FrozenAdvice } from './threshold';
 
 /** 检测方法 */
 export type AnalysisMethod = 'microprobe' | 'sem-eds';
@@ -26,6 +26,27 @@ export interface AnalysisRecord {
   /** 检测日期 YYYY-MM-DD */
   testedAt: string;
   createdAt: number;
+  /**
+   * 结论所依据的阈值版本 id（v4 迁移新增）。
+   * 录入时绑定当前生效版本；发布新版本后该字段保持不变，
+   * 旧检测报告永远按当时版本复现结论。
+   * 历史遗留记录（无版本号）回填为最早区间版本并置 pending-review。
+   */
+  thresholdVersionId?: string;
+  /**
+   * 录入（或最近一次人工重新认定）时冻结的结论及其版本。
+   * 发布新版本不改写该字段，作为并排展示中的“原结论”。
+   */
+  frozenAdvice?: FrozenAdvice;
+  /**
+   * 复核状态（v4 迁移新增）：
+   *  - confirmed：结论已认定，与所绑定版本一致
+   *  - stale：新版本重算后结论变化，原建议已失效，等待人工决定是否重新认定
+   *  - pending-review：旧数据无版本号，按最早区间回填，待核对
+   */
+  reviewState?: 'confirmed' | 'stale' | 'pending-review';
+  /** 最近一次人工认定时间 */
+  reviewedAt?: number;
 }
 
 export const ANALYSIS_METHOD_LABELS: Record<AnalysisMethod, string> = {
@@ -41,38 +62,11 @@ export const ANALYSIS_TARGET_LABELS: Record<AnalysisTarget, string> = {
 export const ANALYSIS_METHODS: AnalysisMethod[] = ['microprobe', 'sem-eds'];
 export const ANALYSIS_TARGETS: AnalysisTarget[] = ['sample', 'section'];
 
-/** 阈值定义：用于分类建议与命中说明 */
-export interface AnalysisThreshold {
-  key: 'fa' | 'fs' | 'ni' | 'kamaciteBandwidth';
-  label: string;
-  min: number;
-  max: number;
-  unit: string;
-  description: string;
-}
-
-export const ANALYSIS_THRESHOLDS: AnalysisThreshold[] = [
-  { key: 'fa', label: '橄榄石 Fa', min: 0, max: 30, unit: 'mol%', description: '普通球粒陨石橄榄石 Fa 通常 0–30 mol%，超出应考虑无球粒或铁陨石' },
-  { key: 'fs', label: '辉石 Fs', min: 0, max: 30, unit: 'mol%', description: '辉石 Fs 与 Fa 差值过大提示非平衡或混合样品' },
-  { key: 'ni', label: 'Ni', min: 0, max: 20, unit: 'wt%', description: '铁陨石 Ni 多在 5–20 wt%，石陨石通常低于 1 wt%' },
-  { key: 'kamaciteBandwidth', label: '铁纹石带宽', min: 0, max: 2, unit: 'mm', description: '带宽 > 0.5 mm 偏粗粒八面体铁陨石，< 0.2 mm 偏六面体' },
-];
-
-/** 阈值命中说明 */
-export interface ThresholdHit {
-  key: AnalysisThreshold['key'];
-  label: string;
-  value: number;
-  unit: string;
-  inRange: boolean;
-  description: string;
-}
-
-/** 单条检测记录的评估结果 */
-export interface AnalysisEvaluation {
-  hits: ThresholdHit[];
-  advice: ClassificationAdvice;
-}
+export const ANALYSIS_REVIEW_LABELS: Record<NonNullable<AnalysisRecord['reviewState']>, string> = {
+  confirmed: '已认定',
+  stale: '结论失效待重新认定',
+  'pending-review': '旧记录待核对',
+};
 
 /** 生成一条空检测记录骨架 */
 export function emptyAnalysisDraft(sampleId: string): Omit<AnalysisRecord, 'id' | 'createdAt'> {

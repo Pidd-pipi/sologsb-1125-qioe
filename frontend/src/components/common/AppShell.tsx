@@ -21,6 +21,7 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 import PublicIcon from '@mui/icons-material/Public';
 import { useSampleStore } from '../../stores/sampleStore';
 import { useToastStore } from '../../stores/uiStore';
+import { onVersionChanged } from '../../services/versionService';
 
 const DRAWER_WIDTH = 232;
 
@@ -45,6 +46,7 @@ const NAV = [
   { to: '/sections', label: '切片库' },
   { to: '/analysis', label: '分析检测' },
   { to: '/locations', label: '发现地分布' },
+  { to: '/thresholds', label: '阈值版本' },
 ];
 
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -56,6 +58,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!loaded) void loadAll();
+  }, [loaded, loadAll]);
+
+  // 其它标签页发布版本 / 复核结论后，本页自动重载，避免基于旧 current 决策
+  useEffect(() => {
+    if (!loaded) return;
+    return onVersionChanged(() => {
+      void loadAll();
+    });
   }, [loaded, loadAll]);
 
   return (

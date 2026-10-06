@@ -82,6 +82,9 @@ export function SampleCard({
           <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 'auto', pt: 1 }}>
             <Chip size="small" variant="outlined" label={`切片 ${sectionCount}`} />
             <Chip size="small" variant="outlined" label={`检测 ${analysisCount}`} />
+            {sample.reviewState === 'pending' ? (
+              <Chip size="small" color="warning" label="分类待重新认定" />
+            ) : null}
             {missing.map((m) => (
               <Chip key={m} size="small" color="warning" label={m} />
             ))}

@@ -31,6 +31,11 @@ export interface ThinSection {
   micrographs: string[];
   quality: SectionQuality;
   createdAt: number;
+  /**
+   * 发布阈值版本时共同绑定的版本 id（v4 迁移新增）。
+   * 与所属样本、该样本的检测记录共享同一发布版本。
+   */
+  thresholdVersionId?: string;
 }
 
 export const PREPARATION_LABELS: Record<PreparationMethod, string> = {

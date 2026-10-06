@@ -30,6 +30,21 @@ export interface MeteoriteSample {
   createdAt: number;
   /** v3 升级迁移新增字段 */
   updatedAt: number;
+  /**
+   * 发布阈值版本时共同绑定的版本 id（v4 迁移新增）。
+   * 同一次发布涉及的样本、切片、检测记录绑定同一版本。
+   */
+  thresholdVersionId?: string;
+  /**
+   * 分类复核状态（v4 迁移新增）：
+   *  - confirmed：当前分类已按最新版本认定
+   *  - pending：新版本下其检测记录结论失效，等待人工决定是否重新认定
+   */
+  reviewState?: 'confirmed' | 'pending';
+  /** 新版本重算给出的建议分类，等待人工确认后才会写入 category */
+  suggestedCategory?: SampleCategory;
+  /** 最近一次分类认定时间 */
+  reviewedAt?: number;
 }
 
 export const CATEGORY_LABELS: Record<SampleCategory, string> = {
